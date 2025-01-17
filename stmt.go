@@ -8,9 +8,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/btnguyen2k/consu/reddo"
 )
 
@@ -270,16 +271,17 @@ func (r *ResultNoResultSet) RowsAffected() (int64, error) {
 // ResultResultSet captures the result from statements that expect a ResultSet to be returned.
 type ResultResultSet struct {
 	err               error
-	count             int
-	stmtOutput        *dynamodb.ExecuteStatementOutput
-	cursorCount       int
 	columnList        []string
 	columnTypes       map[string]reflect.Type
 	columnSourceTypes map[string]string
+	mu                sync.Mutex // protects the following fields
+	stmt              *statement
+	read              int32
+	items             []map[string]types.AttributeValue
 }
 
 func (r *ResultResultSet) init() *ResultResultSet {
-	if r.stmtOutput == nil {
+	if r.stmt == nil {
 		return r
 	}
 	if r.columnTypes == nil {
@@ -289,12 +291,11 @@ func (r *ResultResultSet) init() *ResultResultSet {
 		r.columnSourceTypes = make(map[string]string)
 	}
 
-	// save number of records
-	r.count = len(r.stmtOutput.Items)
+	r.items = r.stmt.output.Items
 
 	// pre-calculate column types
 	colMap := make(map[string]bool)
-	for _, item := range r.stmtOutput.Items {
+	for _, item := range r.stmt.output.Items {
 		for col, av := range item {
 			colMap[col] = true
 			if r.columnTypes[col] == nil {
@@ -319,6 +320,15 @@ func (r *ResultResultSet) init() *ResultResultSet {
 	sort.Strings(r.columnList)
 
 	return r
+}
+
+func (r *ResultResultSet) fetchNext() (err error) {
+	if r.stmt.output.NextToken == nil {
+		return io.EOF
+	}
+	r.stmt.input.NextToken = r.stmt.output.NextToken
+	r.stmt.output, err = r.stmt.client.ExecuteStatement(r.stmt.ctx, r.stmt.input)
+	return err
 }
 
 // Columns implements driver.Rows/Columns.
@@ -348,11 +358,25 @@ func (r *ResultResultSet) Next(dest []driver.Value) error {
 	if r.err != nil {
 		return r.err
 	}
-	if r.cursorCount >= r.count {
+	if r.stmt.limit > 0 && r.read >= r.stmt.limit {
 		return io.EOF
 	}
-	rowData := r.stmtOutput.Items[r.cursorCount]
-	r.cursorCount++
+
+	r.mu.Lock()
+	if len(r.items) == 0 {
+		r.err = r.fetchNext()
+		if r.err != nil {
+			r.mu.Unlock()
+			return r.err
+		}
+		r.mu.Unlock()
+		return r.Next(dest)
+	}
+	rowData := r.items[0]
+	r.items = r.items[1:]
+	r.mu.Unlock()
+	r.read++
+
 	for i, colName := range r.columnList {
 		var value interface{}
 		_ = attributevalue.Unmarshal(rowData[colName], &value)

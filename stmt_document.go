@@ -147,7 +147,7 @@ func (s *StmtSelect) QueryContext(ctx context.Context, values []driver.NamedValu
 	// 	return &TxResultResultSet{wrap: ResultResultSet{err: err}, outputFn: outputFn}, nil
 	// }
 	result := (&ResultResultSet{
-		stmtOutput: outputFn(),
+		stmt:       outputFn(),
 		columnList: extractSelectedColumnList(s.query)}).init()
 	return result, err
 }
@@ -208,7 +208,7 @@ func (s *StmtUpdate) Query(values []driver.Value) (driver.Rows, error) {
 // @Available since v0.2.0
 func (s *StmtUpdate) QueryContext(ctx context.Context, values []driver.NamedValue) (driver.Rows, error) {
 	outputFn, err := s.conn.executeContext(ctx, s.Stmt, values)
-	result := (&ResultResultSet{stmtOutput: outputFn()}).init()
+	result := (&ResultResultSet{stmt: outputFn()}).init()
 	if err == nil || IsAwsError(err, "ConditionalCheckFailedException") {
 		err = nil
 	}
@@ -230,7 +230,7 @@ func (s *StmtUpdate) ExecContext(ctx context.Context, values []driver.NamedValue
 	}
 	affectedRows := int64(0)
 	if err == nil {
-		affectedRows = int64(len(outputFn().Items))
+		affectedRows = int64(len(outputFn().output.Items))
 	}
 	if IsAwsError(err, "ConditionalCheckFailedException") {
 		err = nil
@@ -266,7 +266,7 @@ func (s *StmtDelete) Query(values []driver.Value) (driver.Rows, error) {
 // @Available since v0.2.0
 func (s *StmtDelete) QueryContext(ctx context.Context, values []driver.NamedValue) (driver.Rows, error) {
 	outputFn, err := s.conn.executeContext(ctx, s.Stmt, values)
-	result := (&ResultResultSet{stmtOutput: outputFn()}).init()
+	result := (&ResultResultSet{stmt: outputFn()}).init()
 	if err == nil || IsAwsError(err, "ConditionalCheckFailedException") {
 		err = nil
 	}
@@ -288,7 +288,7 @@ func (s *StmtDelete) ExecContext(ctx context.Context, values []driver.NamedValue
 	}
 	affectedRows := int64(0)
 	if err == nil {
-		affectedRows = int64(len(outputFn().Items))
+		affectedRows = int64(len(outputFn().output.Items))
 	}
 	if IsAwsError(err, "ConditionalCheckFailedException") {
 		err = nil

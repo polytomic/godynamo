@@ -37,7 +37,14 @@ type txStmt struct {
 	output *dynamodb.ExecuteStatementOutput
 }
 
-type executeStatementOutputWrapper func() *dynamodb.ExecuteStatementOutput
+type statement struct {
+	ctx    context.Context
+	client *dynamodb.Client
+	limit  int32
+	input  *dynamodb.ExecuteStatementInput
+	output *dynamodb.ExecuteStatementOutput
+}
+type statementOutputWrapper func() *statement
 
 // Conn is AWS DynamoDB implementation of driver.Conn.
 type Conn struct {
@@ -141,16 +148,19 @@ func (c *Conn) rollback() error {
 	return nil
 }
 
-// execute executes a PartiQL query and returns the result output.
-func (c *Conn) executeContext(ctx context.Context, stmt *Stmt, values []driver.NamedValue) (executeStatementOutputWrapper, error) {
+// executeContext executes a PartiQL query and returns the result output. The
+// context must remain valid while the query results are read. executeContext
+// returns a function in order to support Transactions, which do not have a
+// result until the Transaction is committed.
+func (c *Conn) executeContext(ctx context.Context, stmt *Stmt, values []driver.NamedValue) (statementOutputWrapper, error) {
 	//fmt.Printf("[DEBUG] executeContext: in-tx %5v - %s\n", c.tx != nil, stmt.query)
 	if c.txMode == txStarted {
 		// transaction has started and not yet committed or rolled back
 		// --> can add more statements to the transaction
 		txStmt := txStmt{stmt: stmt, values: values}
 		c.txStmtList = append(c.txStmtList, &txStmt)
-		return func() *dynamodb.ExecuteStatementOutput {
-			return txStmt.output
+		return func() *statement {
+			return &statement{output: txStmt.output}
 		}, ErrInTx
 	}
 	if c.txMode != txNone {
@@ -184,70 +194,19 @@ func (c *Conn) executeContext(ctx context.Context, stmt *Stmt, values []driver.N
 		input.ConsistentRead = aws.Bool(consistentRead.FirstBool())
 	}
 
-	if !reSelect.MatchString(stmt.query) {
-		output, err := c.client.ExecuteStatement(c.ensureContext(ctx), input)
-		return func() *dynamodb.ExecuteStatementOutput {
-			return output
-		}, err
-	}
-
-	return c.executeSelectContext(ctx, stmt, input)
-}
-
-// SELECT query could be paged, need to fetch all pages
-func (c *Conn) executeSelectContext(ctx context.Context, stmt *Stmt, input *dynamodb.ExecuteStatementInput) (executeStatementOutputWrapper, error) {
-	ctx = c.ensureContext(ctx)
-	var firstOutput *dynamodb.ExecuteStatementOutput
-	var err error
 	var limitNumItems int32 = 0
 	if stmt.limit != nil {
 		limitNumItems = *stmt.limit
 	}
-	//idx := 0                         // FIXME
-	//fetched := make(map[string]bool) // FIXME
-	for {
-		var output *dynamodb.ExecuteStatementOutput
-		output, err = c.client.ExecuteStatement(ctx, input)
-		if err != nil {
-			return func() *dynamodb.ExecuteStatementOutput {
-				return output
-			}, err
+	output, err := c.client.ExecuteStatement(c.ensureContext(ctx), input)
+	return func() *statement {
+		return &statement{
+			ctx:    ctx,
+			client: c.client,
+			input:  input,
+			limit:  limitNumItems,
+			output: output,
 		}
-
-		//// FIXME
-		//idx++
-		//for _, item := range output.Items {
-		//	fetched[item["id"].(*types.AttributeValueMemberS).Value] = true
-		//}
-		//fmt.Printf("[DEBUG] %2d / %s (LIMIT %#v) / LastEvaluatedKey: %d - NextToken: %5v / Fetched: %2d - Total: %2d\n", idx, stmt.query, stmt.limit, len(output.LastEvaluatedKey), output.NextToken != nil, len(output.Items), len(fetched))
-		//// END FIXME
-
-		if firstOutput == nil {
-			firstOutput = output
-		} else {
-			firstOutput.ResultMetadata = output.ResultMetadata
-			firstOutput.LastEvaluatedKey = output.LastEvaluatedKey
-			firstOutput.NextToken = output.NextToken
-			firstOutput.ConsumedCapacity = output.ConsumedCapacity
-			firstOutput.Items = append(firstOutput.Items, output.Items...)
-		}
-		input.NextToken = output.NextToken
-
-		//merge result
-		if limitNumItems > 0 {
-			if len(firstOutput.Items) >= int(limitNumItems) {
-				firstOutput.Items = firstOutput.Items[:limitNumItems]
-				break
-			}
-			input.Limit = aws.Int32(limitNumItems - int32(len(firstOutput.Items)))
-		}
-
-		if output.NextToken == nil {
-			break
-		}
-	}
-	return func() *dynamodb.ExecuteStatementOutput {
-		return firstOutput
 	}, err
 }
 

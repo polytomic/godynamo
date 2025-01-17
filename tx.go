@@ -9,7 +9,7 @@ import (
 // @Available since v0.2.0
 type TxResultNoResultSet struct {
 	hasOutput    bool
-	outputFn     executeStatementOutputWrapper
+	outputFn     statementOutputWrapper
 	affectedRows int64
 }
 
