@@ -328,6 +328,9 @@ func (r *ResultResultSet) fetchNext() (err error) {
 	}
 	r.stmt.input.NextToken = r.stmt.output.NextToken
 	r.stmt.output, err = r.stmt.client.ExecuteStatement(r.stmt.ctx, r.stmt.input)
+	if err == nil && r.stmt.output != nil {
+		r.items = r.stmt.output.Items
+	}
 	return err
 }
 
