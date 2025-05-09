@@ -290,6 +290,9 @@ func (r *ResultResultSet) init() *ResultResultSet {
 	if r.columnSourceTypes == nil {
 		r.columnSourceTypes = make(map[string]string)
 	}
+	if r.stmt.output == nil {
+		return r
+	}
 
 	r.items = r.stmt.output.Items
 
