@@ -3,17 +3,28 @@ package godynamo
 import (
 	"database/sql"
 	"database/sql/driver"
-	"github.com/aws/aws-sdk-go-v2/aws"
+	"errors"
 	"os"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/btnguyen2k/consu/reddo"
+)
+
+const (
+	// AWSConfigID defines the key to specify in the connection string to use a
+	// previously registered aws.Config.
+	AWSConfigID = "aws_config_id"
+)
+
+var (
+	ErrUnknownAWSConfigID = errors.New("unknown AWS config ID")
 )
 
 // init is automatically invoked when the driver is imported
@@ -93,13 +104,18 @@ func (d *Driver) Open(connStr string) (driver.Conn, error) {
 			opts.EndpointOptions.DisableHTTPS = true
 		}
 	}
-	client := dynamodb.New(opts)
 
-	awsConfigLock.RLock()
-	defer awsConfigLock.RUnlock()
-	conf := awsConfig
-	if conf != nil {
-		client = dynamodb.NewFromConfig(*conf, mergeDynamoDBOptions(opts))
+	var client *dynamodb.Client
+	if awsConfigID, ok := params[AWSConfigID]; ok {
+		awsConfigLock.RLock()
+		conf, ok := awsConfig[awsConfigID]
+		awsConfigLock.RUnlock()
+		if !ok {
+			return nil, ErrUnknownAWSConfigID
+		}
+		client = dynamodb.NewFromConfig(conf, mergeDynamoDBOptions(opts))
+	} else {
+		client = dynamodb.New(opts)
 	}
 
 	return &Conn{client: client, timeout: time.Duration(timeoutMs) * time.Millisecond}, nil
@@ -108,7 +124,7 @@ func (d *Driver) Open(connStr string) (driver.Conn, error) {
 // awsConfig is the AWS configuration to be used by the dynamodb client.
 var (
 	awsConfigLock = &sync.RWMutex{}
-	awsConfig     *aws.Config
+	awsConfig     = map[string]aws.Config{}
 )
 
 // RegisterAWSConfig registers aws.Config to be used by the dynamodb client.
@@ -117,19 +133,19 @@ var (
 //   - HTTPClient
 //
 // @Available since v1.3.0
-func RegisterAWSConfig(conf aws.Config) {
+func RegisterAWSConfig(id string, conf aws.Config) {
 	awsConfigLock.Lock()
 	defer awsConfigLock.Unlock()
-	awsConfig = &conf
+	awsConfig[id] = conf
 }
 
 // DeregisterAWSConfig removes the registered aws.Config.
 //
 // @Available since v1.3.0
-func DeregisterAWSConfig() {
+func DeregisterAWSConfig(id string) {
 	awsConfigLock.Lock()
 	defer awsConfigLock.Unlock()
-	awsConfig = nil
+	delete(awsConfig, id)
 }
 
 // mergeDynamoDBOptions merges the provided dynamodb.Options into the default dynamodb.Options.
