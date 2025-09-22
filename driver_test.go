@@ -1,10 +1,12 @@
 package godynamo
 
 import (
-	"github.com/btnguyen2k/consu/reddo"
 	"os"
 	"reflect"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/btnguyen2k/consu/reddo"
 )
 
 func Test_parseConnString_parseParamValue(t *testing.T) {
@@ -115,5 +117,68 @@ func Test_parseConnString_parseParamValue(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDriverMultipleConfigs(t *testing.T) {
+	// Test registering and using AWS config
+	configID := "test-config-1"
+	testConfig := aws.Config{
+		Region: "us-west-2",
+	}
+
+	// Register the config
+	RegisterAWSConfig(configID, testConfig)
+
+	// Verify the config is stored
+	awsConfigLock.RLock()
+	storedConfig, exists := awsConfig[configID]
+	awsConfigLock.RUnlock()
+
+	if !exists {
+		t.Fatal("Config should be registered")
+	}
+	if storedConfig.Region != testConfig.Region {
+		t.Fatalf("Expected region %s, got %s", testConfig.Region, storedConfig.Region)
+	}
+
+	// Test using the registered config with only the config ID in connection string
+	driver := &Driver{}
+	connStr := "aws_config_id=" + configID
+
+	conn, err := driver.Open(connStr)
+	if err != nil {
+		t.Fatalf("Expected successful connection with registered config, got error: %v", err)
+	}
+	if conn == nil {
+		t.Fatal("Expected valid connection")
+	}
+
+	// Test deregistering the config
+	DeregisterAWSConfig(configID)
+
+	// Verify the config is removed
+	awsConfigLock.RLock()
+	_, exists = awsConfig[configID]
+	awsConfigLock.RUnlock()
+
+	if exists {
+		t.Fatal("Config should be deregistered")
+	}
+
+	// Test that using deregistered config returns error
+	_, err = driver.Open(connStr)
+	if err != ErrUnknownAWSConfigID {
+		t.Fatalf("Expected ErrUnknownAWSConfigID, got: %v", err)
+	}
+
+	// Test fallback to regular client when no AWS_CONFIG_ID is provided
+	connStrNoConfig := "region=us-east-1;akid=test;secret_key=test"
+	conn2, err := driver.Open(connStrNoConfig)
+	if err != nil {
+		t.Fatalf("Expected successful connection without config ID, got error: %v", err)
+	}
+	if conn2 == nil {
+		t.Fatal("Expected valid connection without config ID")
 	}
 }

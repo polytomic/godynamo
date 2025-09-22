@@ -20,7 +20,7 @@ import (
 const (
 	// AWSConfigID defines the key to specify in the connection string to use a
 	// previously registered aws.Config.
-	AWSConfigID = "aws_config_id"
+	AWSConfigID = "AWS_CONFIG_ID"
 )
 
 var (
